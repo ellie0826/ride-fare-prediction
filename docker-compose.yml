@@ -1,0 +1,136 @@
+services:
+  # Kafka and Zookeeper for streaming
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    container_name: redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  # MLflow for model registry
+  mlflow:
+    image: python:3.9-slim
+    hostname: mlflow
+    container_name: mlflow
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./mlflow:/mlflow
+      - ./models:/models
+    working_dir: /mlflow
+    command: >
+      bash -c "
+        pip install mlflow==2.6.0 &&
+        mlflow server --host 0.0.0.0 --port 5001 --default-artifact-root /models --backend-store-uri sqlite:///mlflow.db
+      "
+
+  # FastAPI Prediction Service
+  prediction-service:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    hostname: prediction-service
+    container_name: prediction-service
+    ports:
+      - "8000:8000"
+    depends_on:
+      - kafka
+      - redis
+      - mlflow
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_URL=redis://redis:6379
+      - MLFLOW_TRACKING_URI=http://mlflow:5001
+    volumes:
+      - ./models:/app/models
+      - ./config:/app/config
+
+  # Data Streaming Services
+  user-driver-service:
+    build:
+      context: .
+      dockerfile: services/data_streams/Dockerfile
+    hostname: user-driver-service
+    container_name: user-driver-service
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - SERVICE_TYPE=user_driver
+    volumes:
+      - ./config:/app/config
+    command: python user_driver_stream.py
+
+  traffic-weather-service:
+    build:
+      context: .
+      dockerfile: services/data_streams/Dockerfile
+    hostname: traffic-weather-service
+    container_name: traffic-weather-service
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - SERVICE_TYPE=traffic_weather
+    volumes:
+      - ./config:/app/config
+    command: python traffic_weather_stream.py
+
+  # Streamlit Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    hostname: frontend
+    container_name: frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      - prediction-service
+    environment:
+      - PREDICTION_SERVICE_URL=http://prediction-service:8000
+    volumes:
+      - ./config:/app/config
+
+volumes:
+  redis_data:
+  mlflow_data:
+
+networks:
+  default:
+    name: ride-prediction-network

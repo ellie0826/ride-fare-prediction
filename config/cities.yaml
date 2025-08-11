@@ -1,0 +1,78 @@
+cities:
+  nyc:
+    name: "New York City"
+    bounds:
+      min_lat: 40.4774
+      max_lat: 40.9176
+      min_lon: -74.2591
+      max_lon: -73.7004
+    base_fare: 2.50
+    per_mile_rate: 1.75
+    per_minute_rate: 0.35
+    surge_multiplier_range: [1.0, 3.0]
+    traffic_zones:
+      - name: "Manhattan"
+        bounds: [40.7489, 40.7831, -74.0118, -73.9442]
+        traffic_factor: 1.5
+      - name: "Brooklyn"
+        bounds: [40.5707, 40.7395, -74.0423, -73.8333]
+        traffic_factor: 1.2
+      - name: "Queens"
+        bounds: [40.5431, 40.8007, -73.9624, -73.7004]
+        traffic_factor: 1.1
+
+  sf:
+    name: "San Francisco"
+    bounds:
+      min_lat: 37.7049
+      max_lat: 37.8199
+      min_lon: -122.5161
+      max_lon: -122.3574
+    base_fare: 3.00
+    per_mile_rate: 2.15
+    per_minute_rate: 0.40
+    surge_multiplier_range: [1.0, 2.8]
+    traffic_zones:
+      - name: "Downtown"
+        bounds: [37.7749, 37.7949, -122.4194, -122.3894]
+        traffic_factor: 1.6
+      - name: "Mission"
+        bounds: [37.7449, 37.7749, -122.4294, -122.3994]
+        traffic_factor: 1.3
+
+  chicago:
+    name: "Chicago"
+    bounds:
+      min_lat: 41.6444
+      max_lat: 42.0230
+      min_lon: -87.9401
+      max_lon: -87.5240
+    base_fare: 2.25
+    per_mile_rate: 1.65
+    per_minute_rate: 0.30
+    surge_multiplier_range: [1.0, 2.5]
+    traffic_zones:
+      - name: "Loop"
+        bounds: [41.8708, 41.8888, -87.6413, -87.6213]
+        traffic_factor: 1.4
+      - name: "North Side"
+        bounds: [41.8888, 41.9588, -87.6813, -87.6213]
+        traffic_factor: 1.2
+
+default_city: "nyc"
+
+# Weather impact factors
+weather_factors:
+  clear: 1.0
+  light_rain: 1.1
+  moderate_rain: 1.25
+  heavy_rain: 1.5
+  snow: 1.4
+  storm: 1.8
+
+# Traffic impact factors
+traffic_factors:
+  low: 1.0
+  moderate: 1.15
+  high: 1.35
+  severe: 1.6
