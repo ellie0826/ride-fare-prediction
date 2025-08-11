@@ -24,16 +24,14 @@ class DataPreprocessor:
         """
         logger.info(f"Loading data from {data_path}")
         
-        # Load the dataset
+        # Data loading and preprocessing
         df = pd.read_csv(data_path)
-        
-        # Basic data cleaning
         df = self._clean_data(df)
         
         # Feature engineering
         df = self._engineer_features(df)
         
-        # Add synthetic traffic and weather data
+        # Add traffic and weather data
         df = self._add_synthetic_features(df)
         
         logger.info(f"Preprocessed dataset shape: {df.shape}")
@@ -45,15 +43,14 @@ class DataPreprocessor:
         """
         logger.info("Cleaning data...")
         
-        # Remove rows with missing values in critical columns
-        critical_columns = ['fare_amount', 'pickup_latitude', 'pickup_longitude', 
+        main_columns = ['fare_amount', 'pickup_latitude', 'pickup_longitude', 
                            'dropoff_latitude', 'dropoff_longitude', 'passenger_count']
-        df = df.dropna(subset=critical_columns)
+        df = df.dropna(subset=main_columns)
         
-        # Remove fare outliers (negative fares, extremely high fares)
+        # Remove fare outliers 
         df = df[(df['fare_amount'] > 0) & (df['fare_amount'] < 200)]
         
-        # Remove coordinate outliers (focus on NYC area for now)
+        # Remove coordinate outliers 
         nyc_bounds = self.config['cities']['nyc']['bounds']
         df = df[
             (df['pickup_latitude'] >= nyc_bounds['min_lat']) &
@@ -78,16 +75,14 @@ class DataPreprocessor:
         """
         logger.info("Engineering features...")
         
-        # Convert pickup_datetime to datetime
+        # Time-based features
         df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
-        
-        # Extract time-based features
         df['hour'] = df['pickup_datetime'].dt.hour
         df['day_of_week'] = df['pickup_datetime'].dt.dayofweek
         df['month'] = df['pickup_datetime'].dt.month
         df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
         
-        # Calculate distance using Haversine formula
+        # Calculate distance (Haversine formula)
         df['distance_km'] = self._calculate_distance(
             df['pickup_latitude'], df['pickup_longitude'],
             df['dropoff_latitude'], df['dropoff_longitude']
@@ -111,7 +106,7 @@ class DataPreprocessor:
     
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """
-        Calculate the great circle distance between two points on earth
+        Calculate the Haversine distance between two points
         """
         # Convert decimal degrees to radians
         lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
@@ -134,10 +129,8 @@ class DataPreprocessor:
         
         np.random.seed(42)  # For reproducibility
         
-        # Traffic level based on time and location
+        # Create synthetic traffic and weather features
         df['traffic_level'] = self._generate_traffic_level(df)
-        
-        # Weather conditions
         df['weather_condition'] = self._generate_weather_condition(df)
         
         # Driver density (affects surge pricing)
@@ -171,12 +164,12 @@ class DataPreprocessor:
         traffic_levels = []
         
         for _, row in df.iterrows():
-            # Base traffic probability on hour and day
             hour = row['hour']
             is_weekend = row['is_weekend']
+            is_rush_hour = row['is_rush_hour']
             
             # Higher traffic during rush hours on weekdays
-            if not is_weekend and (7 <= hour <= 9 or 17 <= hour <= 19):
+            if not is_weekend and is_rush_hour:
                 traffic_probs = [0.1, 0.3, 0.4, 0.2]  # low, moderate, high, severe
             elif not is_weekend and (10 <= hour <= 16):
                 traffic_probs = [0.3, 0.4, 0.2, 0.1]
@@ -226,7 +219,7 @@ class DataPreprocessor:
         """
         # Driver density affects surge pricing (lower density = higher surge)
         driver_densities = np.random.exponential(scale=2.0, size=len(df))
-        # Normalize to 0.5-3.0 range (inverse relationship with surge)
+        # Normalize to 0.5-3.0 range
         driver_densities = 0.5 + (driver_densities / np.max(driver_densities)) * 2.5
         
         return pd.Series(driver_densities)
@@ -235,7 +228,7 @@ class DataPreprocessor:
         """
         Prepare features and target for model training
         """
-        # Select features for training
+
         feature_columns = [
             'pickup_latitude', 'pickup_longitude',
             'dropoff_latitude', 'dropoff_longitude',
