@@ -7,13 +7,12 @@ echo "========================================"
 if ! docker info > /dev/null 2>&1; then
     echo "❌ Docker is not running."
     echo ""
-    echo "🔧 To fix this:"
+    echo "To fix this:"
     echo "1. Open Docker Desktop application"
     echo "2. Wait for Docker to fully start (whale icon steady in menu bar)"
     echo "3. Or run: open -a Docker (on macOS)"
     echo "4. Then run this script again"
     echo ""
-    echo "📖 For more help, see: troubleshooting.md"
     exit 1
 fi
 
@@ -66,11 +65,11 @@ if [ ! -d "models" ] || [ -z "$(ls -A models 2>/dev/null)" ]; then
     deactivate
 fi
 
-# Create necessary directories
+# Create directories
 echo "📁 Creating directories..."
 mkdir -p models mlflow logs
 
-# Start the system
+# Start system
 echo "🚀 Starting all services..."
 docker-compose up --build
 
