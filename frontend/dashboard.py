@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import time
 import yaml
 import random
+from urllib.parse import quote
 
 # Page configuration
 st.set_page_config(
@@ -76,6 +77,42 @@ def check_api_health():
     except:
         return False
 
+def geocode_address(address, city_name):
+    """Convert address to coordinates using Nominatim (OpenStreetMap)"""
+    try:
+        # Add city to address for better accuracy
+        full_address = f"{address}, {city_name}"
+        encoded_address = quote(full_address)
+        
+        # Use Nominatim API (free, no API key required)
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={encoded_address}&limit=1"
+        
+        response = requests.get(url, timeout=10, headers={'User-Agent': 'RideFarePrediction/1.0'})
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                lat = float(data[0]['lat'])
+                lon = float(data[0]['lon'])
+                return lat, lon, data[0]['display_name']
+        return None, None, None
+    except Exception as e:
+        st.error(f"Geocoding error: {e}")
+        return None, None, None
+
+def reverse_geocode(lat, lon):
+    """Convert coordinates to address"""
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}"
+        response = requests.get(url, timeout=10, headers={'User-Agent': 'RideFarePrediction/1.0'})
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('display_name', f"{lat:.6f}, {lon:.6f}")
+        return f"{lat:.6f}, {lon:.6f}"
+    except:
+        return f"{lat:.6f}, {lon:.6f}"
+
 # Sidebar
 st.sidebar.title("🚗 Ride Fare Prediction")
 st.sidebar.markdown("---")
@@ -113,20 +150,56 @@ with tab1:
     
     with col1:
         st.subheader("Pickup Location")
+        
+        # Address input option
+        pickup_address = st.text_input(
+            "📍 Pickup Address", 
+            placeholder="e.g., Times Square, Manhattan",
+            help="Enter an address and click 'Find Location' to convert to coordinates"
+        )
+        
+        col1a, col1b = st.columns([3, 1])
+        with col1a:
+            if st.button("🔍 Find Pickup Location", key="find_pickup"):
+                if pickup_address:
+                    with st.spinner("Finding location..."):
+                        lat, lon, display_name = geocode_address(pickup_address, city_config['name'])
+                        if lat and lon:
+                            # Check if coordinates are within city bounds
+                            if (bounds['min_lat'] <= lat <= bounds['max_lat'] and 
+                                bounds['min_lon'] <= lon <= bounds['max_lon']):
+                                st.session_state.pickup_lat = lat
+                                st.session_state.pickup_lon = lon
+                                st.success(f"✅ Found: {display_name}")
+                            else:
+                                st.warning(f"⚠️ Location found but outside {city_config['name']} bounds")
+                                st.info(f"Found: {display_name}")
+                        else:
+                            st.error("❌ Address not found. Please try a different address.")
+        
+        # Coordinate inputs (with session state for updates)
         pickup_lat = st.number_input(
             "Pickup Latitude", 
             min_value=bounds['min_lat'], 
             max_value=bounds['max_lat'],
-            value=(bounds['min_lat'] + bounds['max_lat']) / 2,
-            format="%.6f"
+            value=st.session_state.get('pickup_lat', (bounds['min_lat'] + bounds['max_lat']) / 2),
+            format="%.6f",
+            key="pickup_lat_input"
         )
         pickup_lon = st.number_input(
             "Pickup Longitude", 
             min_value=bounds['min_lon'], 
             max_value=bounds['max_lon'],
-            value=(bounds['min_lon'] + bounds['max_lon']) / 2,
-            format="%.6f"
+            value=st.session_state.get('pickup_lon', (bounds['min_lon'] + bounds['max_lon']) / 2),
+            format="%.6f",
+            key="pickup_lon_input"
         )
+        
+        # Show current address for coordinates
+        if st.button("📍 Show Address", key="show_pickup_address"):
+            with st.spinner("Getting address..."):
+                address = reverse_geocode(pickup_lat, pickup_lon)
+                st.info(f"📍 {address}")
         
         # Quick location buttons for pickup
         if 'traffic_zones' in city_config:
@@ -134,26 +207,62 @@ with tab1:
             for zone in city_config['traffic_zones']:
                 if st.button(f"📍 {zone['name']}", key=f"pickup_{zone['name']}"):
                     zone_bounds = zone['bounds']
-                    pickup_lat = (zone_bounds[0] + zone_bounds[1]) / 2
-                    pickup_lon = (zone_bounds[2] + zone_bounds[3]) / 2
+                    st.session_state.pickup_lat = (zone_bounds[0] + zone_bounds[1]) / 2
+                    st.session_state.pickup_lon = (zone_bounds[2] + zone_bounds[3]) / 2
                     st.experimental_rerun()
     
     with col2:
         st.subheader("Dropoff Location")
+        
+        # Address input option
+        dropoff_address = st.text_input(
+            "📍 Dropoff Address", 
+            placeholder="e.g., Central Park, Manhattan",
+            help="Enter an address and click 'Find Location' to convert to coordinates"
+        )
+        
+        col2a, col2b = st.columns([3, 1])
+        with col2a:
+            if st.button("🔍 Find Dropoff Location", key="find_dropoff"):
+                if dropoff_address:
+                    with st.spinner("Finding location..."):
+                        lat, lon, display_name = geocode_address(dropoff_address, city_config['name'])
+                        if lat and lon:
+                            # Check if coordinates are within city bounds
+                            if (bounds['min_lat'] <= lat <= bounds['max_lat'] and 
+                                bounds['min_lon'] <= lon <= bounds['max_lon']):
+                                st.session_state.dropoff_lat = lat
+                                st.session_state.dropoff_lon = lon
+                                st.success(f"✅ Found: {display_name}")
+                            else:
+                                st.warning(f"⚠️ Location found but outside {city_config['name']} bounds")
+                                st.info(f"Found: {display_name}")
+                        else:
+                            st.error("❌ Address not found. Please try a different address.")
+        
+        # Coordinate inputs (with session state for updates)
         dropoff_lat = st.number_input(
             "Dropoff Latitude", 
             min_value=bounds['min_lat'], 
             max_value=bounds['max_lat'],
-            value=(bounds['min_lat'] + bounds['max_lat']) / 2 + 0.01,
-            format="%.6f"
+            value=st.session_state.get('dropoff_lat', (bounds['min_lat'] + bounds['max_lat']) / 2 + 0.01),
+            format="%.6f",
+            key="dropoff_lat_input"
         )
         dropoff_lon = st.number_input(
             "Dropoff Longitude", 
             min_value=bounds['min_lon'], 
             max_value=bounds['max_lon'],
-            value=(bounds['min_lon'] + bounds['max_lon']) / 2 + 0.01,
-            format="%.6f"
+            value=st.session_state.get('dropoff_lon', (bounds['min_lon'] + bounds['max_lon']) / 2 + 0.01),
+            format="%.6f",
+            key="dropoff_lon_input"
         )
+        
+        # Show current address for coordinates
+        if st.button("📍 Show Address", key="show_dropoff_address"):
+            with st.spinner("Getting address..."):
+                address = reverse_geocode(dropoff_lat, dropoff_lon)
+                st.info(f"📍 {address}")
         
         # Quick location buttons for dropoff
         if 'traffic_zones' in city_config:
@@ -161,8 +270,8 @@ with tab1:
             for zone in city_config['traffic_zones']:
                 if st.button(f"📍 {zone['name']}", key=f"dropoff_{zone['name']}"):
                     zone_bounds = zone['bounds']
-                    dropoff_lat = (zone_bounds[0] + zone_bounds[1]) / 2
-                    dropoff_lon = (zone_bounds[2] + zone_bounds[3]) / 2
+                    st.session_state.dropoff_lat = (zone_bounds[0] + zone_bounds[1]) / 2
+                    st.session_state.dropoff_lon = (zone_bounds[2] + zone_bounds[3]) / 2
                     st.experimental_rerun()
     
     # Passenger count
