@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List
 import yaml
-from kafka import KafkaProducer
+from kafka import KafkaProducer, KafkaConsumer
+import redis
 import os
 import math
 
@@ -30,6 +31,16 @@ class TrafficWeatherStreamService:
             value_serializer=lambda v: json.dumps(v).encode('utf-8'),
             key_serializer=lambda k: k.encode('utf-8') if k else None
         )
+        
+        # Initialize Redis for accessing driver data
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+        try:
+            self.redis_client = redis.from_url(redis_url)
+            self.redis_client.ping()  # Test connection
+            logger.info("Connected to Redis for driver data access")
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {e}. Traffic will use time-based patterns only.")
+            self.redis_client = None
         
         # Initialize simulation state
         self.current_city = self.config['default_city']
@@ -185,8 +196,8 @@ class TrafficWeatherStreamService:
             zone_name = zone['name']
             zone_traffic_factor = zone.get('traffic_factor', 1.0)
             
-            # Calculate traffic level based on time patterns
-            traffic_level = self._calculate_traffic_level(current_hour, is_weekend, zone_traffic_factor)
+            # Calculate traffic level dynamically based on current driver density
+            traffic_level = self._calculate_traffic_level(current_hour, is_weekend, zone_traffic_factor, zone_name)
             
             # Update traffic state
             if zone_name in self.traffic_state:
@@ -220,9 +231,125 @@ class TrafficWeatherStreamService:
         
         return traffic_updates
     
-    def _calculate_traffic_level(self, hour: int, is_weekend: bool, zone_factor: float) -> str:
+    def _calculate_traffic_level(self, hour: int, is_weekend: bool, zone_factor: float, zone_name: str = None) -> str:
         """
-        Calculate traffic level based on time patterns and zone characteristics
+        Calculate traffic level dynamically based on current driver density in the zone
+        """
+        # Try to get real-time driver data if Redis is available
+        if self.redis_client and zone_name:
+            try:
+                driver_density_ratio = self._get_zone_driver_density(zone_name)
+                if driver_density_ratio is not None:
+                    return self._driver_density_to_traffic_level(driver_density_ratio, hour, is_weekend)
+            except Exception as e:
+                logger.debug(f"Failed to get driver density for {zone_name}: {e}")
+        
+        # Fallback to time-based patterns if Redis unavailable or no driver data
+        return self._calculate_time_based_traffic_level(hour, is_weekend, zone_factor)
+    
+    def _get_zone_driver_density(self, zone_name: str) -> float:
+        """
+        Get current driver density ratio for a specific zone from Redis
+        """
+        try:
+            # Get zone bounds from config
+            city_config = self.config['cities'][self.current_city]
+            zone_bounds = None
+            
+            for zone in city_config.get('traffic_zones', []):
+                if zone['name'] == zone_name:
+                    zone_bounds = zone['bounds']
+                    break
+            
+            if not zone_bounds:
+                return None
+            
+            # Get all available drivers from Redis
+            driver_keys = self.redis_client.keys(f"driver_location:{self.current_city}:*")
+            if not driver_keys:
+                return None
+            
+            total_drivers = 0
+            zone_drivers = 0
+            
+            for key in driver_keys:
+                driver_data = self.redis_client.get(key)
+                if driver_data:
+                    driver = json.loads(driver_data)
+                    if driver.get('status') == 'available':
+                        total_drivers += 1
+                        
+                        # Check if driver is in this zone
+                        driver_lat = driver.get('latitude', 0)
+                        driver_lon = driver.get('longitude', 0)
+                        
+                        if (zone_bounds[0] <= driver_lat <= zone_bounds[1] and
+                            zone_bounds[2] <= driver_lon <= zone_bounds[3]):
+                            zone_drivers += 1
+            
+            if total_drivers == 0:
+                return None
+            
+            # Calculate density ratio (drivers in zone / total drivers)
+            density_ratio = zone_drivers / total_drivers
+            logger.debug(f"Zone {zone_name}: {zone_drivers}/{total_drivers} drivers, ratio: {density_ratio:.3f}")
+            
+            return density_ratio
+            
+        except Exception as e:
+            logger.error(f"Error calculating driver density for {zone_name}: {e}")
+            return None
+    
+    def _driver_density_to_traffic_level(self, density_ratio: float, hour: int, is_weekend: bool) -> str:
+        """
+        Convert driver density ratio to traffic level
+        Logic: More drivers = less traffic congestion (inverse relationship)
+        """
+        # Base traffic level on driver density
+        # High density = low traffic, Low density = high traffic
+        
+        if density_ratio >= 0.20:  # Very high driver density (20%+ of all drivers in this zone)
+            traffic_level = 'low'
+        elif density_ratio >= 0.12:  # High driver density (12-20%)
+            traffic_level = 'moderate'  
+        elif density_ratio >= 0.06:  # Medium driver density (6-12%)
+            traffic_level = 'high'
+        else:  # Low driver density (<6%)
+            traffic_level = 'severe'
+        
+        # Apply time-based adjustments
+        rush_hour_multiplier = 1.0
+        if not is_weekend and (7 <= hour <= 9 or 17 <= hour <= 19):
+            rush_hour_multiplier = 1.3  # Increase congestion during rush hours
+        elif 22 <= hour <= 5:
+            rush_hour_multiplier = 0.7  # Decrease congestion late night/early morning
+        
+        # Adjust traffic level based on time
+        if rush_hour_multiplier > 1.2:
+            # Upgrade traffic level during rush hours
+            level_upgrade = {
+                'low': 'moderate',
+                'moderate': 'high', 
+                'high': 'severe',
+                'severe': 'severe'
+            }
+            traffic_level = level_upgrade.get(traffic_level, traffic_level)
+        elif rush_hour_multiplier < 0.8:
+            # Downgrade traffic level during quiet hours
+            level_downgrade = {
+                'severe': 'high',
+                'high': 'moderate',
+                'moderate': 'low',
+                'low': 'low'
+            }
+            traffic_level = level_downgrade.get(traffic_level, traffic_level)
+        
+        logger.debug(f"Driver density {density_ratio:.3f} → {traffic_level} traffic (rush_multiplier: {rush_hour_multiplier})")
+        return traffic_level
+    
+    def _calculate_time_based_traffic_level(self, hour: int, is_weekend: bool, zone_factor: float) -> str:
+        """
+        Fallback method: Calculate traffic level based on time patterns only
         """
         # Base traffic probability on hour and day
         if not is_weekend:

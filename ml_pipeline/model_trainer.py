@@ -14,7 +14,7 @@ import os
 from datetime import datetime
 import warnings
 
-# Suppress urllib3 warnings for cleaner output
+
 warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -22,7 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Reduce MLflow logging noise
+# Reduce MLflow logging 
 logging.getLogger("mlflow").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
@@ -41,7 +41,7 @@ class ModelTrainer:
             mlflow.set_tracking_uri(mlflow_tracking_uri)
             mlflow.set_experiment("ride-fare-prediction")
             
-            # Test connection with a simple call
+            # Test connection
             mlflow.get_experiment_by_name("ride-fare-prediction")
             
         except Exception as e:
