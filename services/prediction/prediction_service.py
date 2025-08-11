@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import pandas as pd
@@ -180,10 +181,37 @@ class PredictionService:
             except Exception as e:
                 logger.error(f"Driver density consumer error: {e}")
         
+        # Driver locations consumer (for dynamic traffic calculation)
+        def consume_driver_locations():
+            try:
+                consumer = KafkaConsumer(
+                    'driver_locations',
+                    bootstrap_servers=[kafka_servers],
+                    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                    auto_offset_reset='latest'
+                )
+                
+                for message in consumer:
+                    driver_data = message.value
+                    city = driver_data['city']
+                    driver_id = driver_data['driver_id']
+                    
+                    # Store individual driver location in Redis for dynamic traffic calculation
+                    self.redis_client.setex(
+                        f"driver_location:{city}:{driver_id}",
+                        180,  # 3 minutes TTL
+                        json.dumps(driver_data)
+                    )
+                    
+                    logger.debug(f"Updated driver location for {driver_id} in {city}: {driver_data['status']}")
+            except Exception as e:
+                logger.error(f"Driver locations consumer error: {e}")
+        
         # Start consumers in separate threads
         threading.Thread(target=consume_weather, daemon=True).start()
         threading.Thread(target=consume_traffic, daemon=True).start()
         threading.Thread(target=consume_driver_density, daemon=True).start()
+        threading.Thread(target=consume_driver_locations, daemon=True).start()
         
         logger.info("Kafka consumers started")
     
@@ -210,38 +238,95 @@ class PredictionService:
             'weather_factor': 1.0
         }
     
-    def get_current_traffic(self, city: str, pickup_lat: float, pickup_lon: float) -> Dict:
+    def get_dynamic_traffic_factor(self, city: str, pickup_lat: float, pickup_lon: float) -> Dict:
         """
-        Get current traffic data for a location
+        Calculate dynamic traffic factor based on real-time driver density in the area
         """
+        # Get current driver density data
+        density_data = self.get_driver_density(city)
+        
+        # Define search radius (in degrees, approximately 2km)
+        search_radius = 0.018  # ~2km at NYC latitude
+        
+        # Get all available drivers from Redis or memory
+        local_drivers = []
+        try:
+            # Try to get individual driver locations from Redis
+            driver_keys = self.redis_client.keys(f"driver_location:{city}:*")
+            for key in driver_keys:
+                driver_data = self.redis_client.get(key)
+                if driver_data:
+                    driver = json.loads(driver_data)
+                    if driver.get('status') == 'available':
+                        local_drivers.append(driver)
+        except Exception as e:
+            logger.error(f"Error getting driver locations: {e}")
+        
+        # Count drivers within radius of pickup location
+        nearby_drivers = 0
+        for driver in local_drivers:
+            driver_lat = driver.get('latitude', 0)
+            driver_lon = driver.get('longitude', 0)
+            
+            # Simple distance check (not precise but fast)
+            lat_diff = abs(driver_lat - pickup_lat)
+            lon_diff = abs(driver_lon - pickup_lon)
+            
+            if lat_diff <= search_radius and lon_diff <= search_radius:
+                nearby_drivers += 1
+        
+        # Calculate traffic factor based on driver density
+        # More drivers = less traffic congestion (inverse relationship)
+        # Fewer drivers = more traffic congestion (higher fares)
+        
+        total_available = density_data.get('available_drivers', 50)
         city_config = self.config['cities'].get(city, self.config['cities']['nyc'])
         
-        # Find the traffic zone for the pickup location
-        if 'traffic_zones' in city_config:
-            for zone in city_config['traffic_zones']:
-                zone_bounds = zone['bounds']
-                if (zone_bounds[0] <= pickup_lat <= zone_bounds[1] and
-                    zone_bounds[2] <= pickup_lon <= zone_bounds[3]):
-                    
-                    zone_name = zone['name']
-                    
-                    # Try memory cache
-                    if city in self.current_traffic and zone_name in self.current_traffic[city]:
-                        return self.current_traffic[city][zone_name]
-                    
-                    # Try Redis cache
-                    try:
-                        cached_data = self.redis_client.get(f"traffic:{city}:{zone_name}")
-                        if cached_data:
-                            return json.loads(cached_data)
-                    except Exception as e:
-                        logger.error(f"Redis error: {e}")
+        # Calculate local density ratio
+        if total_available > 0:
+            local_density_ratio = nearby_drivers / total_available
+        else:
+            local_density_ratio = 0.1
         
-        # Default traffic if no data available
+        # Dynamic traffic factor calculation
+        # Base traffic factor ranges from 0.9 to 2.0
+        if local_density_ratio >= 0.15:  # High driver density = low traffic
+            traffic_factor = 0.95 + (0.15 * random.uniform(0.8, 1.2))  # 0.95-1.1
+            traffic_level = 'light'
+            congestion_score = 0.2
+        elif local_density_ratio >= 0.08:  # Medium driver density = moderate traffic
+            traffic_factor = 1.1 + (0.25 * random.uniform(0.8, 1.2))  # 1.1-1.35
+            traffic_level = 'moderate'
+            congestion_score = 0.5
+        elif local_density_ratio >= 0.03:  # Low driver density = heavy traffic
+            traffic_factor = 1.4 + (0.35 * random.uniform(0.8, 1.2))  # 1.4-1.75
+            traffic_level = 'heavy'
+            congestion_score = 0.8
+        else:  # Very low driver density = severe traffic
+            traffic_factor = 1.7 + (0.3 * random.uniform(0.8, 1.2))  # 1.7-2.0
+            traffic_level = 'severe'
+            congestion_score = 0.95
+        
+        # Add time-based adjustments (rush hour effects)
+        current_hour = datetime.now().hour
+        if 7 <= current_hour <= 9 or 17 <= current_hour <= 19:  # Rush hours
+            traffic_factor *= 1.15
+            congestion_score = min(1.0, congestion_score + 0.1)
+        elif 22 <= current_hour <= 5:  # Late night/early morning
+            traffic_factor *= 0.9
+            congestion_score = max(0.1, congestion_score - 0.1)
+        
+        # Ensure traffic factor stays within reasonable bounds
+        traffic_factor = max(0.9, min(2.5, traffic_factor))
+        
         return {
-            'traffic_level': 'moderate',
-            'traffic_factor': 1.15,
-            'congestion_score': 0.5
+            'traffic_level': traffic_level,
+            'traffic_factor': round(traffic_factor, 2),
+            'congestion_score': round(congestion_score, 2),
+            'nearby_drivers': nearby_drivers,
+            'local_density_ratio': round(local_density_ratio, 3),
+            'calculation_method': 'dynamic_driver_based',
+            'timestamp': datetime.now().isoformat()
         }
     
     def get_driver_density(self, city: str) -> Dict:
@@ -291,7 +376,7 @@ class PredictionService:
         
         # Get real-time data
         weather_data = self.get_current_weather(request.city)
-        traffic_data = self.get_current_traffic(request.city, request.pickup_latitude, request.pickup_longitude)
+        traffic_data = self.get_dynamic_traffic_factor(request.city, request.pickup_latitude, request.pickup_longitude)
         density_data = self.get_driver_density(request.city)
         
         # Calculate distance

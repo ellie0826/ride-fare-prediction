@@ -32,7 +32,6 @@ def run_training_in_docker():
         return 1
     
     try:
-        # Build a temporary training image
         logger.info("Building training environment...")
         
         dockerfile_content = """

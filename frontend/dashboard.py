@@ -138,7 +138,91 @@ st.sidebar.markdown("---")
 
 # Main content
 st.title("🚗 Real-Time Ride Fare Prediction System")
-st.markdown(f"**Current City:** {city_config['name']}")
+
+# Auto-refresh for time and weather (every 30 seconds)
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+# Check if 30 seconds have passed for auto-refresh
+current_time_stamp = time.time()
+if current_time_stamp - st.session_state.last_refresh > 30:
+    st.session_state.last_refresh = current_time_stamp
+    st.experimental_rerun()
+
+# Current time and weather display
+col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+with col1:
+    st.markdown(f"**🏙️ Current City:** {city_config['name']}")
+
+with col2:
+    # Current time with live updates
+    current_time = datetime.now().strftime("%H:%M:%S")
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    st.markdown(f"**🕐 Time:** {current_time}")
+    st.markdown(f"**📅 Date:** {current_date}")
+
+with col3:
+    # Current weather from live conditions
+    conditions = get_current_conditions(selected_city)
+    if conditions and 'weather' in conditions:
+        weather = conditions['weather']
+        temp = weather.get('temperature', 0)
+        condition = weather.get('condition', 'Unknown').title()
+        humidity = weather.get('humidity', 0)
+        wind_speed = weather.get('wind_speed', 0)
+        
+        # Weather emoji mapping
+        weather_emoji = {
+            'clear': '☀️',
+            'sunny': '☀️',
+            'cloudy': '☁️',
+            'overcast': '☁️',
+            'rainy': '🌧️',
+            'rain': '🌧️',
+            'stormy': '⛈️',
+            'snow': '❄️',
+            'snowy': '❄️',
+            'foggy': '🌫️',
+            'fog': '🌫️'
+        }
+        
+        emoji = weather_emoji.get(condition.lower(), '🌤️')
+        
+        st.markdown(f"**{emoji} Weather:** {condition}")
+        st.markdown(f"**🌡️ Temp:** {temp:.1f}°C")
+    else:
+        st.markdown("**🌤️ Weather:** Loading...")
+        st.markdown("**🌡️ Temp:** --°C")
+
+with col4:
+    # Additional weather details
+    if conditions and 'weather' in conditions:
+        weather = conditions['weather']
+        humidity = weather.get('humidity', 0)
+        wind_speed = weather.get('wind_speed', 0)
+        
+        st.markdown(f"**💧 Humidity:** {humidity:.0f}%")
+        st.markdown(f"**💨 Wind:** {wind_speed:.1f} km/h")
+    else:
+        st.markdown("**💧 Humidity:** --%")
+        st.markdown("**💨 Wind:** -- km/h")
+
+# Weather impact indicator
+if conditions and 'weather' in conditions:
+    weather = conditions['weather']
+    condition = weather.get('condition', 'clear').lower()
+    
+    # Determine weather impact on fares
+    weather_factors = config.get('weather_factors', {})
+    impact_factor = weather_factors.get(condition, 1.0)
+    
+    if impact_factor > 1.1:
+        st.warning(f"⚠️ Weather Alert: {condition.title()} conditions may increase fares by {((impact_factor - 1) * 100):.0f}%")
+    elif impact_factor < 0.9:
+        st.info(f"ℹ️ Weather Bonus: {condition.title()} conditions may reduce fares by {((1 - impact_factor) * 100):.0f}%")
+
+# Add a separator
+st.markdown("---")
 
 # Create tabs
 tab1, tab2, tab3, tab4 = st.tabs(["🎯 Fare Prediction", "📊 Live Conditions", "📈 Analytics", "⚙️ System Status"])
